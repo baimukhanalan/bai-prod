@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/components.tsx","./src/demo.ts","./src/main.tsx","./src/telegram.d.ts","./src/types.ts","./src/screens/academyscreen.tsx","./src/screens/homescreen.tsx","./src/screens/mentorscreen.tsx","./src/screens/peoplescreen.tsx","./src/screens/profilescreen.tsx","./vite.config.ts"],"version":"5.9.3"}
