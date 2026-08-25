@@ -1,9 +1,15 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+const vercelEnvPath = path.join(repoRoot, '.vercel', 'neon.env');
+if (fs.existsSync(vercelEnvPath)) {
+  const managedDatabaseUrl = dotenv.parse(fs.readFileSync(vercelEnvPath)).DATABASE_URL;
+  if (managedDatabaseUrl) process.env.DATABASE_URL = managedDatabaseUrl;
+}
 dotenv.config({ path: [path.join(repoRoot, '.env.local'), path.join(repoRoot, '.env')], quiet: true });
 
 export const env = z.object({
@@ -27,4 +33,3 @@ export const allowedOrigins = new Set([
   ...(env.CORS_ORIGINS?.split(',').map(origin => origin.trim().replace(/\/$/, '')).filter(Boolean) ?? []),
   ...(env.NODE_ENV === 'development' ? ['http://localhost:5173', 'http://127.0.0.1:5173'] : []),
 ]);
-

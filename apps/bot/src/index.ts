@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
@@ -13,6 +14,11 @@ import { acceptMatch, declineMatch } from './match-service.js';
 import { nextOnboardingStep, onboardingPrompts } from './onboarding.js';
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+const vercelEnvPath = path.join(repoRoot, '.vercel', 'neon.env');
+if (fs.existsSync(vercelEnvPath)) {
+  const managedDatabaseUrl = dotenv.parse(fs.readFileSync(vercelEnvPath)).DATABASE_URL;
+  if (managedDatabaseUrl) process.env.DATABASE_URL = managedDatabaseUrl;
+}
 dotenv.config({ path: [path.join(repoRoot, '.env.local'), path.join(repoRoot, '.env')], quiet: true });
 
 const env = z.object({

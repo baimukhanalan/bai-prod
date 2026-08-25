@@ -5,9 +5,12 @@ dist
 .env.production
 .DS_Store
 .vercel
+.agents/
+skills-lock.json
 coverage
 test-results
 playwright-report
 blob-report
 *.log
 *.dump
+.env*
