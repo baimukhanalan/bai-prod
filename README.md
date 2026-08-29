@@ -29,7 +29,7 @@ Production-oriented monorepo for a Telegram academy/community: grammY onboarding
 ### Bot communication schedule
 
 - After approval: the intro AI lesson and buttons for the lesson, closed channel and Mini App. An approved user can request it again once per day with `/lesson`.
-- Daily at `DAILY_PLAN_HOUR`: the exact number of unfinished tasks for that user's local date and a `✅ Дисциплина` WebApp button.
+- Daily at `DAILY_PLAN_HOUR`: every registered user receives the exact number of unfinished tasks for their local date and a `✅ Дисциплина` WebApp button, including profiles still awaiting approval.
 - Monday at `WEEKLY_CURATOR_HOUR`: curator prompt with the code word `Разбор`.
 - Monday at `WEEKLY_MATCH_HOUR`: the strongest new candidate by complementary `Даю / Ищу` tags, then a consent request. Contacts are sent to both users only after acceptance.
 

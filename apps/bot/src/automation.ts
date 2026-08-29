@@ -57,15 +57,16 @@ export async function enqueueAccepted(prisma: Transaction, match: { id: string; 
 }
 
 export async function planScheduledNotifications(prisma: PrismaClient, now: Date, config: AutomationConfig) {
-  const users = await prisma.user.findMany({ where: { status: 'approved' }, select: { id: true, timeZone: true } });
+  const users = await prisma.user.findMany({ select: { id: true, timeZone: true, status: true } });
   const notifications: Prisma.BotNotificationCreateManyInput[] = [];
   for (const user of users) {
     const local = localParts(now, user.timeZone || config.timeZone);
-    notifications.push({ userId: user.id, type: 'introLesson', dedupeKey: `intro-lesson:${user.id}`, payload: {} });
     if (local.hour >= config.dailyPlanHour) notifications.push({ userId: user.id, type: 'dailyPlan', dedupeKey: `daily-plan:${local.dateKey}:${user.id}`, payload: { dateKey: local.dateKey } });
+    if (local.hour >= config.streakRiskHour) notifications.push({ userId: user.id, type: 'streakRisk', dedupeKey: `streak-risk:${local.dateKey}:${user.id}`, payload: { dateKey: local.dateKey } });
+    if (user.status !== 'approved') continue;
+    notifications.push({ userId: user.id, type: 'introLesson', dedupeKey: `intro-lesson:${user.id}`, payload: {} });
     if (local.weekday === 'Mon' && local.hour >= config.weeklyCuratorHour) notifications.push({ userId: user.id, type: 'weeklyCurator', dedupeKey: `weekly-curator:${local.dateKey}:${user.id}`, payload: {} });
     if (local.weekday === 'Mon' && local.hour >= config.weeklyMatchHour) notifications.push({ userId: user.id, type: 'weeklyMatch', dedupeKey: `weekly-match:${local.dateKey}:${user.id}`, payload: {} });
-    if (local.hour >= config.streakRiskHour) notifications.push({ userId: user.id, type: 'streakRisk', dedupeKey: `streak-risk:${local.dateKey}:${user.id}`, payload: { dateKey: local.dateKey } });
   }
   if (notifications.length) await prisma.botNotification.createMany({ data: notifications, skipDuplicates: true });
 }

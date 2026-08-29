@@ -1,8 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { startRecoveringLoop } from './automation.js';
+import type { PrismaClient } from '@prisma/client';
+import { planScheduledNotifications, startRecoveringLoop, type AutomationConfig } from './automation.js';
 
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+const automationConfig: AutomationConfig = {
+  webAppUrl: 'https://example.com',
+  timeZone: 'Asia/Almaty',
+  dailyPlanHour: 9,
+  weeklyCuratorHour: 10,
+  weeklyMatchHour: 12,
+  streakRiskHour: 21,
+  intervalMs: 60_000,
+};
+
+test('daily notifications include pending users while member-only messages require approval', async () => {
+  const created: Array<{ userId: string; type: string }> = [];
+  const prisma = {
+    user: { findMany: async () => [
+      { id: 'approved', timeZone: 'Asia/Almaty', status: 'approved' },
+      { id: 'pending', timeZone: 'Asia/Almaty', status: 'pending' },
+    ] },
+    botNotification: { createMany: async ({ data }: { data: Array<{ userId: string; type: string }> }) => { created.push(...data); } },
+  } as unknown as PrismaClient;
+
+  await planScheduledNotifications(prisma, new Date('2026-08-24T18:30:00.000Z'), automationConfig);
+
+  const approvedTypes = created.filter(item => item.userId === 'approved').map(item => item.type).sort();
+  const pendingTypes = created.filter(item => item.userId === 'pending').map(item => item.type).sort();
+  assert.deepEqual(approvedTypes, ['dailyPlan', 'introLesson', 'streakRisk', 'weeklyCurator', 'weeklyMatch']);
+  assert.deepEqual(pendingTypes, ['dailyPlan', 'streakRisk']);
+});
 
 test('scheduler recovers after a tick exceeds its deadline', async () => {
   let calls = 0;
