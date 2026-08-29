@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { Bot, Keyboard, InlineKeyboard } from 'grammy';
+import { Bot, GrammyError, Keyboard, InlineKeyboard } from 'grammy';
 import type { User as TelegramUser } from 'grammy/types';
 import { Prisma, PrismaClient } from '@prisma/client';
 import OpenAI from 'openai';
@@ -359,4 +359,15 @@ await bot.api.setMyCommands([
   { command: 'cancel', description: 'Остановить заполнение анкеты' },
 ]);
 await bot.api.setChatMenuButton({ menu_button: { type: 'web_app', text: 'BAI.PROD', web_app: { url: env.WEBAPP_URL } } });
-await bot.start({ onStart: info => console.log(`@${info.username} is running`) });
+for (let attempt = 1; attempt <= 12; attempt += 1) {
+  try {
+    await bot.start({ onStart: info => console.log(`@${info.username} is running`) });
+    break;
+  } catch (error) {
+    const rollingDeployConflict = error instanceof GrammyError && error.error_code === 409;
+    if (!rollingDeployConflict || attempt === 12) throw error;
+    const retryInMs = Math.min(3_000 * attempt, 15_000);
+    console.warn('Telegram polling handover in progress; retrying', { attempt, retryInMs });
+    await new Promise(resolve => setTimeout(resolve, retryInMs));
+  }
+}
