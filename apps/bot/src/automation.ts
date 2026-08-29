@@ -1,4 +1,5 @@
 import { Bot, InlineKeyboard } from 'grammy';
+import { AbortController, type AbortSignal } from 'abort-controller';
 import { BotNotificationType, Prisma, PrismaClient } from '@prisma/client';
 import { chooseCandidate } from './matching.js';
 import {
@@ -17,7 +18,14 @@ export type AutomationConfig = {
   weeklyMatchHour: number;
   streakRiskHour: number;
   intervalMs: number;
+  deliveryTimeoutMs?: number;
+  tickTimeoutMs?: number;
+  heartbeatMs?: number;
 };
+
+const DEFAULT_DELIVERY_TIMEOUT_MS = 45_000;
+const DEFAULT_TICK_TIMEOUT_MS = 180_000;
+const DEFAULT_HEARTBEAT_MS = 15 * 60_000;
 
 type Transaction = Prisma.TransactionClient;
 
@@ -94,7 +102,7 @@ async function weeklyCandidate(prisma: PrismaClient, userId: string) {
   return chooseCandidate(user, candidates);
 }
 
-async function deliver(bot: Bot, prisma: PrismaClient, notification: NonNullable<Awaited<ReturnType<typeof claimNext>>>, config: AutomationConfig) {
+async function deliver(bot: Bot, prisma: PrismaClient, notification: NonNullable<Awaited<ReturnType<typeof claimNext>>>, config: AutomationConfig, signal: AbortSignal) {
   const chatId = notification.user.telegramId.toString();
   const payload = notification.payload as Record<string, unknown>;
   if (notification.type === BotNotificationType.introLesson) {
@@ -102,7 +110,7 @@ async function deliver(bot: Bot, prisma: PrismaClient, notification: NonNullable
     if (config.introLessonUrl) keyboard.url('🎬 Смотреть вводный урок', config.introLessonUrl).row();
     if (config.closedChannelUrl) keyboard.url('🔒 Вступить в закрытый канал', config.closedChannelUrl).row();
     keyboard.webApp('Открыть BAI.PROD', config.webAppUrl);
-    await bot.api.sendMessage(chatId, introLessonText, { parse_mode: 'HTML', reply_markup: keyboard });
+    await bot.api.sendMessage(chatId, introLessonText, { parse_mode: 'HTML', reply_markup: keyboard }, signal);
     return;
   }
   if (notification.type === BotNotificationType.dailyPlan) {
@@ -115,18 +123,18 @@ async function deliver(bot: Bot, prisma: PrismaClient, notification: NonNullable
         AND "is_completed" = false
     `);
     const count = Number(rows[0]?.count ?? 0n);
-    await bot.api.sendMessage(chatId, dailyPlanText(count), { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('✅ Дисциплина', config.webAppUrl) });
+    await bot.api.sendMessage(chatId, dailyPlanText(count), { parse_mode: 'HTML', reply_markup: new InlineKeyboard().webApp('✅ Дисциплина', config.webAppUrl) }, signal);
     return;
   }
   if (notification.type === BotNotificationType.weeklyCurator) {
     const keyboard = config.curatorUrl ? new InlineKeyboard().url('Написать куратору · Разбор', config.curatorUrl) : new InlineKeyboard().webApp('Открыть профиль', config.webAppUrl);
-    await bot.api.sendMessage(chatId, weeklyCuratorText, { parse_mode: 'HTML', reply_markup: keyboard });
+    await bot.api.sendMessage(chatId, weeklyCuratorText, { parse_mode: 'HTML', reply_markup: keyboard }, signal);
     return;
   }
   if (notification.type === BotNotificationType.weeklyMatch) {
     const candidate = await weeklyCandidate(prisma, notification.userId);
     if (!candidate) return;
-    await bot.api.sendMessage(chatId, weeklyMatchText(candidate), { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🤝 Хочу познакомиться', `weekly:connect:${candidate.id}`) });
+    await bot.api.sendMessage(chatId, weeklyMatchText(candidate), { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🤝 Хочу познакомиться', `weekly:connect:${candidate.id}`) }, signal);
     return;
   }
   if (notification.type === BotNotificationType.streakRisk) {
@@ -145,7 +153,7 @@ async function deliver(bot: Bot, prisma: PrismaClient, notification: NonNullable
     await bot.api.sendMessage(chatId, streakRiskText(notification.user.streakDays), {
       parse_mode: 'HTML',
       reply_markup: new InlineKeyboard().webApp('✅ Отметить действие', config.webAppUrl),
-    });
+    }, signal);
     return;
   }
 
@@ -155,18 +163,34 @@ async function deliver(bot: Bot, prisma: PrismaClient, notification: NonNullable
   if (notification.type === BotNotificationType.matchRequest) {
     if (match.status !== 'pending' || match.receiverId !== notification.userId) return;
     const keyboard = new InlineKeyboard().text('✅ Принять', `match:accept:${match.id}`).text('Не сейчас', `match:decline:${match.id}`);
-    await bot.api.sendMessage(chatId, matchRequestText(match.sender), { parse_mode: 'HTML', reply_markup: keyboard });
+    await bot.api.sendMessage(chatId, matchRequestText(match.sender), { parse_mode: 'HTML', reply_markup: keyboard }, signal);
     return;
   }
   if (match.status !== 'accepted') return;
   const isReceiver = match.receiverId === notification.userId;
   const other = isReceiver ? match.sender : match.receiver;
   if (notification.type === BotNotificationType.matchAccepted) {
-    await bot.api.sendMessage(chatId, matchAcceptedText(other, isReceiver), { parse_mode: 'HTML' });
+    await bot.api.sendMessage(chatId, matchAcceptedText(other, isReceiver), { parse_mode: 'HTML' }, signal);
     return;
   }
   const url = other.username ? `https://t.me/${other.username}` : `tg://user?id=${other.telegramId}`;
-  await bot.api.sendMessage(chatId, matchContactText(other), { parse_mode: 'HTML', reply_markup: new InlineKeyboard().url('Открыть чат', url) });
+  await bot.api.sendMessage(chatId, matchContactText(other), { parse_mode: 'HTML', reply_markup: new InlineKeyboard().url('Открыть чат', url) }, signal);
+}
+
+async function withTimeout<T>(label: string, timeoutMs: number, task: (signal: AbortSignal) => Promise<T>) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([task(controller.signal), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function runAutomationTick(bot: Bot, prisma: PrismaClient, config: AutomationConfig, now = new Date()) {
@@ -175,7 +199,7 @@ export async function runAutomationTick(bot: Bot, prisma: PrismaClient, config: 
     const notification = await claimNext(prisma);
     if (!notification) break;
     try {
-      await deliver(bot, prisma, notification, config);
+      await withTimeout('Bot notification delivery', config.deliveryTimeoutMs ?? DEFAULT_DELIVERY_TIMEOUT_MS, signal => deliver(bot, prisma, notification, config, signal));
       await prisma.botNotification.update({ where: { id: notification.id }, data: { sentAt: new Date(), claimedAt: null, lastError: null } });
     } catch (error) {
       const message = error instanceof Error ? error.message.slice(0, 1000) : 'Unknown delivery error';
@@ -184,17 +208,51 @@ export async function runAutomationTick(bot: Bot, prisma: PrismaClient, config: 
   }
 }
 
-export function startAutomation(bot: Bot, prisma: PrismaClient, config: AutomationConfig) {
+type RecoveringLoopOptions = {
+  intervalMs: number;
+  timeoutMs: number;
+  heartbeatMs: number;
+  run: () => Promise<void>;
+  log?: (message: string, details?: Record<string, unknown>) => void;
+  logError?: (message: string, error: unknown) => void;
+};
+
+export function startRecoveringLoop(options: RecoveringLoopOptions) {
   let running = false;
+  let lastHeartbeatAt = 0;
   const tick = async () => {
     if (running) return;
     running = true;
-    try { await runAutomationTick(bot, prisma, config); }
-    catch (error) { console.error('Bot automation tick failed', error); }
+    const startedAt = Date.now();
+    try {
+      await withTimeout('Bot automation tick', options.timeoutMs, () => options.run());
+      const now = Date.now();
+      if (now - lastHeartbeatAt >= options.heartbeatMs) {
+        lastHeartbeatAt = now;
+        options.log?.('Bot automation heartbeat', { elapsedMs: now - startedAt });
+      }
+    }
+    catch (error) { options.logError?.('Bot automation tick failed', error); }
     finally { running = false; }
   };
   void tick();
-  const timer = setInterval(() => void tick(), config.intervalMs);
-  timer.unref();
+  const timer = setInterval(() => void tick(), options.intervalMs);
   return () => clearInterval(timer);
+}
+
+export function startAutomation(bot: Bot, prisma: PrismaClient, config: AutomationConfig) {
+  const tickTimeoutMs = config.tickTimeoutMs ?? DEFAULT_TICK_TIMEOUT_MS;
+  console.log('Bot automation scheduler started', {
+    intervalMs: config.intervalMs,
+    tickTimeoutMs,
+    deliveryTimeoutMs: config.deliveryTimeoutMs ?? DEFAULT_DELIVERY_TIMEOUT_MS,
+  });
+  return startRecoveringLoop({
+    intervalMs: config.intervalMs,
+    timeoutMs: tickTimeoutMs,
+    heartbeatMs: config.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+    run: () => runAutomationTick(bot, prisma, config),
+    log: (message, details) => console.log(message, details),
+    logError: (message, error) => console.error(message, error),
+  });
 }

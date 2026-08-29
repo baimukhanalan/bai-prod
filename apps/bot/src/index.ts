@@ -35,6 +35,8 @@ const env = z.object({
   WEEKLY_MATCH_HOUR: z.coerce.number().int().min(0).max(23).default(12),
   STREAK_RISK_HOUR: z.coerce.number().int().min(0).max(23).default(21),
   BOT_SCHEDULER_INTERVAL_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(60_000),
+  BOT_SCHEDULER_TICK_TIMEOUT_MS: z.coerce.number().int().min(30_000).max(600_000).default(180_000),
+  BOT_DELIVERY_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(120_000).default(45_000),
   OPENAI_API_KEY: z.string().min(20).optional(),
   OPENAI_MODEL: z.string().default('gpt-5-mini'),
   GROUP_AI_ENABLED: z.string().default('false').transform(value => value === 'true'),
@@ -46,7 +48,7 @@ const env = z.object({
 }).parse(process.env);
 
 const prisma = new PrismaClient();
-const bot = new Bot(env.BOT_TOKEN);
+const bot = new Bot(env.BOT_TOKEN, { client: { timeoutSeconds: Math.ceil(env.BOT_DELIVERY_TIMEOUT_MS / 1_000) } });
 const openai = env.GROUP_AI_ENABLED && env.OPENAI_API_KEY ? new OpenAI({ apiKey: env.OPENAI_API_KEY }) : null;
 const allowedGroupChats = new Set(env.GROUP_AI_CHAT_ALLOWLIST?.split(',').map(value => value.trim()).filter(Boolean) ?? []);
 const groupResponder = openai ? new GroupConversationResponder({
@@ -344,6 +346,8 @@ const stopAutomation = startAutomation(bot, prisma, {
   weeklyMatchHour: env.WEEKLY_MATCH_HOUR,
   streakRiskHour: env.STREAK_RISK_HOUR,
   intervalMs: env.BOT_SCHEDULER_INTERVAL_MS,
+  tickTimeoutMs: env.BOT_SCHEDULER_TICK_TIMEOUT_MS,
+  deliveryTimeoutMs: env.BOT_DELIVERY_TIMEOUT_MS,
 });
 process.once('SIGINT', () => { stopAutomation(); bot.stop(); });
 process.once('SIGTERM', () => { stopAutomation(); bot.stop(); });
